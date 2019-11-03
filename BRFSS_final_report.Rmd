@@ -1,0 +1,412 @@
+---
+title: "Exploring the BRFSS data"
+output: 
+  html_document:
+    toc: TRUE
+    toc_float: TRUE
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Introduction
+
+Hello Friend!
+
+My name is Jake, I'm a research analyst from Canada! I'm an intern at a FinTech startup and use R nearly every day to clean data. 
+
+You might see some different functions than the one's we learned in our course - I'll leave comments so you know what's going on! :)
+
+* * *
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(DT)
+theme_set(theme_light())
+```
+
+### Load data
+
+```{r load-data}
+load(here::here("data/_384b2d9eda4b29131fb681b243a7767d_brfss2013.Rdata"))
+```
+
+* * *
+
+## About The Data
+
+_Describe how the observations in the sample are collected, and the implications of this data collection method on the scope of inference (generalizability / causality)._
+
+The [BRFSS](https://www.cdc.gov/brfss/annual_data/2018/pdf/overview-2018-508.pdf) gathered their data using telephone calls in the form of interviews. Most states used a **disproportionate stratified sample (DSS)** design for their landline samples while Guam and Puerto Rico used a **simple random-sample design**.
+
+In the DSS method, states controlled two strata: high-density and medium density.
+
+_"...these were determined by the number of listed household numbers in its hundred block, or set of 100 telephone numbers with the same area code, prefix, and first 2 digits of the suffix and all possible combinations of the last 2 digits."_
+
+After calling in, the interviewers asked different amounts of questions depending on what state they were in. 
+
+The BRFSS questionnaire contained three parts:
+
+1. The **core component** is a standard list of questions asked in every state so these columns contain national-level findings. 
+
+2. The **optional modules** are asked in states who elect to include them in their questionnaire - it is state-level across many states. 
+
+3. The **state-added questions** are untracked questions that were included by the state - they are state-level, but likely to be unique to the state who asked.
+
+Due to this, only the core component could be generalized to the United States as the others will be region specific - _e.g., if we asked people in Hawaii if they thought the weather was nice in December, we wouldn't assume everyone in the United States would think the same!_
+
+The BFRSS also applies post-stratification weights to the data to re-balance their findings. This will be a caveat when analyzing and making assumptions with the data since it is not raw.
+
+* * *
+
+## Research Questions & EDA
+
+### Question 1:
+
+**Do people with higher average alcohol consumption use their seatbelt less?**
+
+Drinking and driving don't mix. So I'm wondering if people who drink more on average, are also more reckless. Let's look at the `avedrnk2` and `seatbelt` variables and see if there's correlation between those who drink more on average and those who do not always wear a seatbelt when driving.
+
+**Hypothesis:**
+
+If alcohol consumption _increases_, then the proportion of seatbelt usage should _decrease_.
+
+```{r seatbelt hypothesis}
+drinking_seatbelts <- brfss2013 %>%
+  select(avedrnk2, seatbelt) %>% # grab our columns
+  drop_na(avedrnk2, seatbelt) %>% # remove missing values
+  mutate(seatbelt = ifelse( # split possible seatbelt responses into Always or Not Always
+    seatbelt == "Always", 
+    "Always wear seatbelt", 
+    "Don't always wear seatbelt"),
+    avedrnk2 = ifelse(
+      avedrnk2 > 10, 
+      10, 
+      avedrnk2)) # make 10 the maximum number of average drinks
+
+total_counts <- drinking_seatbelts %>%
+  count(avedrnk2, name = "total") # to join with the data to calculate proportion
+
+seatbelt_proportions <- drinking_seatbelts %>%
+  count(avedrnk2, seatbelt) %>% # count drinks by seatbelt response
+  inner_join(total_counts, by = "avedrnk2") %>% # add the total values
+  mutate(proportion = n / total) # calculate proportion
+```
+
+We can confirm from our chart (below) that we have a non-linear, negative relationship where as one's `average alcoholic drinks per day` increases, their likelihood to wear a `seatbelt` decreases!
+
+```{r seatbelt_visual}
+seatbelt_proportions %>%
+  ggplot(aes(x = avedrnk2, y = proportion, fill = seatbelt)) +
+  geom_col(position = "fill") +
+  scale_x_continuous(breaks = 0:10, labels = c(0:9, "10+")) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "Does Daily Alcohol Consumption Correlate with Seatbelt usage?",
+       subtitle = "Alcohol appears to make people more reckless",
+       x = "Average Alcoholic Drinks Per Day",
+       y = "Proportion",
+       fill = "")
+```
+
+And look above, people who drink five or more drinks on average a day report to not always wear their seatbelts 3/4ths of the time - that's more than twice the likelihood than someone who has one drink on average!
+
+**So should you be worried of these people when you're on the road??**
+
+Actually, ~8% people have five or more drinks a day and ~14% of people don't wear always seatbelts...
+
+... so what percentage of these people are driving around in the American population?
+
+
+`P(A and B)`= `P(A)` × `P(B)` 
+
+```{r}
+p_dont_always <- drinking_seatbelts %>%
+  count(seatbelt, name = "subset_population") %>%
+  mutate(total = sum(subset_population),
+         proportion = subset_population / total) %>%
+  filter(seatbelt == "Don't always wear seatbelt") %>%
+  select(proportion)
+
+p_avg_drinks_greater_5 <- drinking_seatbelts %>%
+  count(avedrnk2, name = "subset_population") %>%
+  mutate(total = sum(subset_population),
+         proportion = subset_population / total) %>%
+  filter(avedrnk2 >= 5) %>%
+  summarize(total_prop = sum(proportion))
+```
+
+= `P(p_dont_always)` x `P(p_avg_drinks_greater_5)`
+
+= `r p_dont_always` x `r p_avg_drinks_greater_5`
+
+= `r paste0(p_dont_always * p_avg_drinks_greater_5, "%")`
+
+Above is the probability of someone who consumes five or more drinks a day on average and is not wearing a seatbelt around you on the road. How safe does that make you feel?
+
+```{r drinking_summary_table, echo = FALSE}
+drinking_seatbelts %>% 
+  summarize(average_avg_drinks = mean(avedrnk2),
+            median_avg_drinks = median(avedrnk2),
+            sd = sd(avedrnk2),
+            variance = var(avedrnk2),
+            IQR = IQR(avedrnk2),
+            #range = range(avedrnk2),
+            min = min(avedrnk2),
+            max = max(avedrnk2)) %>%
+  gather(`General Drinking Summary Statistics`, Value) %>%
+  datatable(options = list(
+    columnDefs = list(list(className = 'dt-left', targets = 0)),
+    dom = 't',
+    ordering = FALSE
+  ))
+```
+
+### Question 2:
+
+**Does having children affect the average hours of sleep we get?**
+
+Having a child must be exhasting; but I wouldn't know that yet! I _am_ curious if parenthood means less sleep, however. And I have a hunch it affects the mothers more than fathers.
+
+**Hypothesis:**
+
+If number of children _increases_, then the average hours of sleep will _decrease_ for both men and women. Furthermore, the average hours of sleep will be _greater_ for females than males
+
+```{r sleeping_prep}
+# Which gender gets more sleep with kids?
+gender_children_sleep <- brfss2013 %>%
+  select(sex, children, sleptim1) %>%
+  mutate(has_child_in_house = ifelse(children >= 3, 3, children)) %>%
+  drop_na(sex, has_child_in_house, sleptim1)
+
+total_counts <- gender_children_sleep %>%
+  count(sex, has_child_in_house, name = "total") 
+
+children_proportions <- gender_children_sleep %>%
+  count(sex, has_child_in_house, sleptim1) %>%
+  inner_join(total_counts, by = c("sex", "has_child_in_house")) %>%
+  mutate(proportion = n / total) %>%
+  filter(sleptim1 <= 12)
+```
+
+Wow, look below! What a difference in the sleep distributions between people with no children and parents. 
+
+People with no children do not really follow a normal distribution with their sleep either. Interesting! 
+
+It's also obvious from looking at the chart below that people with no children certainly get more their 8 hours far more often than parents.
+
+```{r sleeping_visual_gender}
+children_proportions %>%
+  ggplot(aes(x = sleptim1, y = proportion, colour = as.factor(has_child_in_house))) +
+  geom_line() +
+  facet_wrap(~sex) +
+  geom_vline(xintercept = 8, linetype = 2) +
+  scale_x_continuous(breaks = 0:12) +
+  labs(title = "Do Children Cause Us To Lose Sleep?",
+       subtitle = "Dashed-line marks the recommended sleep (8 Hours)",
+       x = "Hours of Sleep",
+       y = "Proportion",
+       colour = "Number of Children")
+```
+
+Another observation in the chart above, the most common value for both genders who have no children is 8 hours of sleep, while those with more than one child are mostly getting 7 hours. You can say goodbye to that one hour of rest when rearing children.
+
+And look below, the _Male's_ sleep appears to be the most impacted from a child! Curious - I had to double check the data on that one. I wonder why that is.
+
+```{r sleeping_visual_children}
+children_proportions %>%
+  filter(sleptim1 >= 5 & sleptim1 <= 9) %>%
+  ggplot(aes(x = sleptim1, y=proportion, group = sex, colour = sex)) +
+  geom_line() +
+  facet_wrap(~has_child_in_house, ncol = 4) +
+  geom_vline(xintercept = 8, linetype = 2) +
+  labs(title = "What Is The Impact Of Children On Females & Males?",
+       subtitle = "Dashed-line marks the recommended sleep (8 Hours)",
+       x = "Hours of Sleep",
+       y = "Proportion",
+       colour = "")
+```
+
+### Summary Stats {.tabset}
+
+#### Average Americans
+
+Well, the mean and median sleep across Americans turns out to be 7 hours.
+
+```{r summary_stats_sleep, echo = FALSE}
+gender_children_sleep %>% 
+  summarize(average_sleep = mean(sleptim1),
+            median_sleep = median(sleptim1),
+            sd = sd(sleptim1),
+            variance = var(sleptim1),
+            IQR = IQR(sleptim1),
+            #range = range(sleptim1),
+            min = min(sleptim1),
+            max = max(sleptim1)) %>%
+  gather(`Average American Sleeper Statistics`, Value) %>%
+  datatable(options = list(
+    columnDefs = list(list(className = 'dt-left', targets = 0)),
+    dom = 't',
+    ordering = FALSE
+  ))
+```
+
+#### Parents
+
+Parents get a little less sleep.
+
+```{r, echo = FALSE}
+gender_children_sleep %>% 
+  filter(children > 0) %>%
+  summarize(average_sleep = mean(sleptim1),
+            median_sleep = median(sleptim1),
+            sd = sd(sleptim1),
+            variance = var(sleptim1),
+            IQR = IQR(sleptim1),
+            #range = range(sleptim1),
+            min = min(sleptim1),
+            max = max(sleptim1)) %>%
+  gather(`Parent Sleeping Statistics`, Value) %>%
+  datatable(options = list(
+    columnDefs = list(list(className = 'dt-left', targets = 0)),
+    dom = 't',
+    ordering = FALSE
+  ))
+```
+
+#### Non-parents
+
+Non-parents get a bit more.
+
+```{r, echo = FALSE}
+gender_children_sleep %>% 
+  filter(children == 0) %>%
+  summarize(average_sleep = mean(sleptim1),
+            median_sleep = median(sleptim1),
+            sd = sd(sleptim1),
+            variance = var(sleptim1),
+            IQR = IQR(sleptim1),
+            #range = range(sleptim1),
+            min = min(sleptim1),
+            max = max(sleptim1)) %>%
+  gather(`Parent Sleeping Statistics`, Value) %>%
+  datatable(options = list(
+    columnDefs = list(list(className = 'dt-left', targets = 0)),
+    dom = 't',
+    ordering = FALSE
+  ))
+```
+
+### Question 3
+
+The last question already? Well then, let's look at poor mental health days in the past 30 days `menthlth` and see if weight is a dependent variable. I think that'd be interesting to explore by gender too.
+
+**Hypothesis:**
+
+If weight _deviates further from average weight_ with respect to gender, then the number of poor mental health days will _increase._
+
+```{r}
+# round weight into bins for easier analysis, cutting off at 500 lbs
+sex_mental_health_weight <- brfss2013 %>%
+  select(sex, menthlth, weight2, exeroft2) %>%
+  drop_na() %>%
+  mutate(weight2 = as.numeric(as.character(weight2)),
+         bin = round(weight2, -1))  %>%
+  filter(weight2 < 500)
+
+# average mental health by bin and sex
+binned_average_mental_health <- sex_mental_health_weight %>%
+  group_by(bin, sex) %>%
+  summarize(avg_mental_health_days = mean(menthlth))
+
+# get rid of those with less than 100 observations
+under_100_observations <- sex_mental_health_weight %>%
+  count(bin, sex) %>%
+  filter(n < 100)
+
+# average weight by gender
+average_weights_gender <- sex_mental_health_weight %>%
+  group_by(sex) %>%
+  summarize(average_weight = mean(weight2, na.rm = TRUE))
+```
+
+Fascinating. 
+
+I chose to use the y-axis and the fill gradient one variable to better present average poor mental health days.
+
+* Short & dark bars represent lower mental health days on average.
+
+* Tall & light bars represent higher mental health days on average.
+
+I also present the average weight, calculated using `mean()`, to provide perspective to what is the most common weight for each gender.
+
+```{r mental_health_visual}
+binned_average_mental_health  %>%
+  anti_join(under_100_observations) %>%
+  ggplot(aes(x = bin, y = avg_mental_health_days, fill = avg_mental_health_days)) +
+  geom_col() +
+  geom_vline(data = average_weights_gender, mapping = aes(xintercept = average_weight), linetype = 2) +
+  labs(title = "How does weight affect bad mental health days between males and females?",
+       subtitle = "Dashed-line represents average weight\nMinumum 100 observations",
+       fill = "Avg Mental Health \nDays Last 30",
+       y = "Average Mental Health Days",
+       x = "Weight") +
+  facet_wrap(~sex)
+```
+
+Amazing. What I find interesting is the bi-modal distribution in the chart above - people who are very underweight and quite overweight compared to the average have more poor mental health days for both genders.
+
+Of note, women are especially prone to poor mental health days when their weight begins exceeding 200 lbs.
+
+Meanwhile, those who are the average weight are seemingly the happiest.
+
+### Summary Stats {.tabset}
+
+#### Males
+
+```{r summary_stats_sleep2, echo = FALSE}
+sex_mental_health_weight %>% 
+  filter(sex == "Male") %>%
+  summarize(average_weight = mean(weight2, na.rm = TRUE),
+            median_weight = median(weight2, na.rm = TRUE),
+            sd = sd(weight2, na.rm = TRUE),
+            variance = var(weight2, na.rm = TRUE),
+            IQR = IQR(weight2, na.rm = TRUE),
+            #range = range(weight2),
+            min = min(weight2, na.rm = TRUE),
+            max = max(weight2, na.rm = TRUE)) %>%
+  gather(`American Male Weight Statistics`, Value) %>%
+  datatable(options = list(
+    columnDefs = list(list(className = 'dt-left', targets = 0)),
+    dom = 't',
+    ordering = FALSE
+  ))
+```
+
+#### Females
+
+```{r, echo = FALSE}
+sex_mental_health_weight %>% 
+  filter(sex == "Female") %>%
+  summarize(average_weight = mean(weight2, na.rm = TRUE),
+            median_weight = median(weight2, na.rm = TRUE),
+            sd = sd(weight2, na.rm = TRUE),
+            variance = var(weight2, na.rm = TRUE),
+            IQR = IQR(weight2, na.rm = TRUE),
+            #range = range(weight2),
+            min = min(weight2, na.rm = TRUE),
+            max = max(weight2, na.rm = TRUE)) %>%
+  gather(`American Female Weight Statistics`, Value) %>%
+  datatable(options = list(
+    columnDefs = list(list(className = 'dt-left', targets = 0)),
+    dom = 't',
+    ordering = FALSE
+  ))
+```
+
+Thanks for reviewing my notebook! You're awesome :)
